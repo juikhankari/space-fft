@@ -118,12 +118,10 @@ def main():
         subs[band]     = subtract_background(img)
 
     interval = ZScaleInterval()
-    colors   = {"B": "Blues_r", "V": "gray", "R": "Reds_r"}
-
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     for ax, band in zip(axes, ["B", "V", "R"]):
         vmin, vmax = interval.get_limits(subs[band])
-        ax.imshow(subs[band], origin="lower", cmap=colors[band], vmin=vmin, vmax=vmax)
+        ax.imshow(subs[band], origin="lower", cmap="gray", vmin=vmin, vmax=vmax)
         ax.set_title(f"M51  [{band}]")
         ax.axis("off")
 
@@ -170,7 +168,7 @@ def main():
 
     for label, fn, fmt in rows:
         vals = [fn(results[b], b) for b in ["B", "V", "R"]]
-        row  = f"  {label:>{w}}  " + "  ".join(f"{v:{fmt}:>14}" for v in vals)
+        row  = f"  {label:>{w}}  " + "  ".join(f"{format(v, fmt):>14}" for v in vals)
         print(row)
 
     print("\n  Ratios (relative to V):")
