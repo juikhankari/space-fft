@@ -1,9 +1,10 @@
 """
-Compare raw flux counts in B vs R for the same selected region of M51.
+Compare raw flux counts and SNR across B, V, R for the same region of M51.
 
-Downloads B and R FITS files from ryspark/asymmetry, displays them
-side-by-side, lets you draw one box on the V-band reference image,
-then reports total counts and the B/R ratio for that region.
+Downloads all three FITS files from ryspark/asymmetry, shows them side by
+side, asks for two boxes (signal + small sky sample), then reports raw counts
+and SNR = (S_net * t) / sqrt(S_net*t + Sky_scaled*t + D*t*N + RN²*N)
+for every filter on the same bounding box.
 """
 
 import json
@@ -11,6 +12,7 @@ import subprocess
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import sep
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
 import urllib.request
@@ -25,6 +27,9 @@ BANDS = {
 }
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
+DARK_CURRENT = 0.002   # e-/pixel/s
+READ_NOISE   = 10.0    # e- RMS
+
 
 def _gh_download_url(filename):
     result = subprocess.run(
@@ -36,8 +41,8 @@ def _gh_download_url(filename):
 
 def load_band(band):
     os.makedirs(DATA_DIR, exist_ok=True)
-    filename  = BANDS[band]
-    local     = os.path.join(DATA_DIR, filename)
+    filename = BANDS[band]
+    local    = os.path.join(DATA_DIR, filename)
     if not os.path.exists(local):
         print(f"Fetching {filename} …")
         urllib.request.urlretrieve(_gh_download_url(filename), local)
@@ -46,81 +51,133 @@ def load_band(band):
         return h[0].data.astype(float), h[0].header
 
 
-def pick_box(ax, color="cyan"):
-    print("Click TWO CORNERS of the box …")
+def subtract_background(data):
+    d    = np.ascontiguousarray(data, np.float64)
+    mask = np.isnan(d)
+    bkg  = sep.Background(d, mask=mask, bw=64, bh=64)
+    return d - bkg.back()
+
+
+def pick_box(fig, label, color):
+    print(f"Click TWO CORNERS of the {label} box …")
     pts = plt.ginput(2, timeout=60)
     if len(pts) < 2:
         raise RuntimeError("Cancelled.")
     (x0, y0), (x1, y1) = pts
     x0, x1 = sorted([int(round(x0)), int(round(x1))])
     y0, y1 = sorted([int(round(y0)), int(round(y1))])
-    rect = patches.Rectangle(
-        (x0, y0), x1 - x0, y1 - y0,
-        linewidth=2, edgecolor=color, facecolor="none"
-    )
-    ax.add_patch(rect)
+    for ax in fig.axes:
+        ax.add_patch(patches.Rectangle(
+            (x0, y0), x1 - x0, y1 - y0,
+            linewidth=2, edgecolor=color, facecolor="none", label=label,
+        ))
+    fig.axes[1].legend(loc="upper right", fontsize=7)
     plt.draw()
     return x0, y0, x1, y1
 
 
-def box_sum(data, x0, y0, x1, y1):
-    region = data[y0:y1, x0:x1]
-    valid  = region[~np.isnan(region)]
-    return float(np.sum(valid)), float(np.mean(valid)), len(valid)
+def extract_pixels(data, x0, y0, x1, y1):
+    region = data[y0:y1, x0:x1].ravel()
+    return region[~np.isnan(region)]
+
+
+def compute_snr(sig_pix, sky_pix, exptime):
+    N             = len(sig_pix)
+    counts        = float(np.sum(sig_pix))
+    sky_per_pixel = float(np.mean(sky_pix))
+    sky_scaled    = sky_per_pixel * N
+    S_net         = counts - sky_scaled
+    t             = exptime
+    flux          = S_net * t
+    flux_err      = np.sqrt(
+        S_net      * t +
+        sky_scaled * t +
+        DARK_CURRENT * t * N +
+        READ_NOISE**2 * N
+    )
+    return {
+        "counts":        counts,
+        "sky_per_pixel": sky_per_pixel,
+        "sky_scaled":    sky_scaled,
+        "S_net":         S_net,
+        "flux":          flux,
+        "flux_err":      flux_err,
+        "SNR":           flux / flux_err,
+    }
 
 
 def main():
-    print("Loading B, V, R bands …")
-    data_b, hdr_b = load_band("B")
-    data_v, _     = load_band("V")
-    data_r, hdr_r = load_band("R")
+    print("Loading B, V, R …")
+    images  = {}
+    headers = {}
+    subs    = {}
+    for band in ["B", "V", "R"]:
+        img, hdr       = load_band(band)
+        images[band]   = img
+        headers[band]  = hdr
+        subs[band]     = subtract_background(img)
 
     interval = ZScaleInterval()
+    colors   = {"B": "Blues_r", "V": "gray", "R": "Reds_r"}
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    for ax, (band, img) in zip(axes, [("B", data_b), ("V", data_v), ("R", data_r)]):
-        vmin, vmax = interval.get_limits(img)
-        ax.imshow(img, origin="lower", cmap="gray", vmin=vmin, vmax=vmax)
+    for ax, band in zip(axes, ["B", "V", "R"]):
+        vmin, vmax = interval.get_limits(subs[band])
+        ax.imshow(subs[band], origin="lower", cmap=colors[band], vmin=vmin, vmax=vmax)
         ax.set_title(f"M51  [{band}]")
         ax.axis("off")
 
-    fig.suptitle("Draw a box on any panel — same pixel coords applied to all bands", fontsize=11)
+    fig.suptitle(
+        "1. Draw SIGNAL box (cyan)  →  2. Draw small SKY box (orange)",
+        fontsize=11
+    )
     plt.tight_layout()
     plt.ion()
     plt.show()
 
-    # Let user pick box on whichever panel they click
-    print("\nDraw your box on any of the three images.")
-    x0, y0, x1, y1 = pick_box(axes[1])   # ginput works across the whole figure
+    sx0, sy0, sx1, sy1 = pick_box(fig, "Signal", "cyan")
+    bx0, by0, bx1, by1 = pick_box(fig, "Sky",    "orange")
 
-    # Draw the same box on B and R panels too
-    for ax in [axes[0], axes[2]]:
-        ax.add_patch(patches.Rectangle(
-            (x0, y0), x1 - x0, y1 - y0,
-            linewidth=2, edgecolor="cyan", facecolor="none"
-        ))
-    plt.draw()
+    exptime = {b: float(headers[b].get("EXPTIME", headers[b].get("EXPOSURE", 1)))
+               for b in ["B", "V", "R"]}
 
-    # Extract counts from the same region in B and R
-    t_b = float(hdr_b.get("EXPTIME", hdr_b.get("EXPOSURE", 1)))
-    t_r = float(hdr_r.get("EXPTIME", hdr_r.get("EXPOSURE", 1)))
+    results = {}
+    for band in ["B", "V", "R"]:
+        sig_pix = extract_pixels(subs[band], sx0, sy0, sx1, sy1)
+        sky_pix = extract_pixels(subs[band], bx0, by0, bx1, by1)
+        results[band] = compute_snr(sig_pix, sky_pix, exptime[band])
 
-    sum_b, mean_b, n_b = box_sum(data_b, x0, y0, x1, y1)
-    sum_r, mean_r, n_r = box_sum(data_r, x0, y0, x1, y1)
+    N = results["B"]["SNR"]   # just for reference
 
-    # Normalise by exposure time so we're comparing count rates
-    rate_b = sum_b / t_b
-    rate_r = sum_r / t_r
+    print(f"\n=== Signal box: ({sx0},{sy0}) → ({sx1},{sy1})  |  {len(extract_pixels(subs['V'], sx0, sy0, sx1, sy1))} px ===")
+    print(f"=== Sky box:    ({bx0},{by0}) → ({bx1},{by1}) ===\n")
 
-    print(f"\n=== Box: ({x0},{y0}) → ({x1},{y1})  |  {n_b} pixels ===")
-    print(f"\n  {'':30s}  {'B':>14}  {'R':>14}")
-    print(f"  {'Exposure time (s)':30s}  {t_b:>14.1f}  {t_r:>14.1f}")
-    print(f"  {'Total raw counts (ADU)':30s}  {sum_b:>14.1f}  {sum_r:>14.1f}")
-    print(f"  {'Mean counts/pixel (ADU)':30s}  {mean_b:>14.4f}  {mean_r:>14.4f}")
-    print(f"  {'Count rate (ADU/s)':30s}  {rate_b:>14.2f}  {rate_r:>14.2f}")
-    print(f"\n  Raw counts  R / B  = {sum_r / sum_b:.4f}")
-    print(f"  Count rate  R / B  = {rate_r / rate_b:.4f}")
-    print(f"  (R brighter = ratio > 1, B brighter = ratio < 1)")
+    w = 28
+    header_row = f"  {'':>{w}}  {'B':>14}  {'V':>14}  {'R':>14}"
+    print(header_row)
+    print("  " + "-" * (w + 48))
+
+    rows = [
+        ("Exposure time (s)",       lambda r, b: exptime[b],          ".1f"),
+        ("Total counts (ADU)",      lambda r, b: r["counts"],         ".1f"),
+        ("Sky/pixel (ADU)",         lambda r, b: r["sky_per_pixel"],  ".4f"),
+        ("Sky scaled to aperture",  lambda r, b: r["sky_scaled"],     ".1f"),
+        ("Net signal S_net (ADU)",  lambda r, b: r["S_net"],          ".1f"),
+        ("flux  (S_net * t)",       lambda r, b: r["flux"],           ".1f"),
+        ("flux_err",                lambda r, b: r["flux_err"],       ".2f"),
+        ("SNR  (flux / flux_err)",  lambda r, b: r["SNR"],            ".2f"),
+    ]
+
+    for label, fn, fmt in rows:
+        vals = [fn(results[b], b) for b in ["B", "V", "R"]]
+        row  = f"  {label:>{w}}  " + "  ".join(f"{v:{fmt}:>14}" for v in vals)
+        print(row)
+
+    print("\n  Ratios (relative to V):")
+    for band in ["B", "R"]:
+        snr_ratio   = results[band]["SNR"]   / results["V"]["SNR"]
+        count_ratio = results[band]["counts"] / results["V"]["counts"]
+        print(f"    {band}/V  counts={count_ratio:.4f}   SNR={snr_ratio:.4f}")
 
     plt.ioff()
     plt.show()
