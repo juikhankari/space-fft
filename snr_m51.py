@@ -20,7 +20,7 @@ READ_NOISE   = 10.0    # e- RMS — adjust for actual camera
 
 # --- Data source ---
 BASE_URL = (
-    "https://raw.githubusercontent.com/ryspark/asymmetry/main"
+    "https://media.githubusercontent.com/media/ryspark/asymmetry/main"
     "/data/m51/2024_04_28/stacked"
 )
 BANDS = {"B": "m51_B_stacked.fits",
