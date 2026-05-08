@@ -6,6 +6,8 @@ lets user select signal (spiral arm) and background (sky) boxes,
 then computes SNR = (S * t) / sqrt(S*t + Sky*t + D*t + RN^2).
 """
 
+import json
+import subprocess
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -19,14 +21,22 @@ DARK_CURRENT = 0.002   # e-/pixel/s — adjust for actual camera
 READ_NOISE   = 10.0    # e- RMS — adjust for actual camera
 
 # --- Data source ---
-BASE_URL = (
-    "https://media.githubusercontent.com/media/ryspark/asymmetry/main"
-    "/data/m51/2024_04_28/stacked"
-)
+SOURCE_REPO = "ryspark/asymmetry"
+SOURCE_PATH = "data/m51/2024_04_28/stacked"
 BANDS = {"B": "m51_B_stacked.fits",
          "V": "m51_V_stacked.fits",
          "R": "m51_R_stacked.fits"}
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+
+
+def _gh_download_url(filename: str) -> str:
+    """Use the gh CLI to get a fresh signed LFS download URL."""
+    api_path = f"repos/{SOURCE_REPO}/contents/{SOURCE_PATH}/{filename}"
+    result = subprocess.run(
+        ["gh", "api", api_path],
+        capture_output=True, text=True, check=True
+    )
+    return json.loads(result.stdout)["download_url"]
 
 
 def download_fits(band: str) -> str:
@@ -34,7 +44,8 @@ def download_fits(band: str) -> str:
     filename = BANDS[band]
     local_path = os.path.join(DATA_DIR, filename)
     if not os.path.exists(local_path):
-        url = f"{BASE_URL}/{filename}"
+        print(f"Fetching signed download URL for {filename} …")
+        url = _gh_download_url(filename)
         print(f"Downloading {filename} (~30 MB) …")
         urllib.request.urlretrieve(url, local_path)
         print("  done.")
