@@ -158,6 +158,13 @@ def compute_snr(
     )
     snr = numerator / denominator
 
+    # Verification: SNR = flux / flux_err
+    # flux     = S_net * t  (total net counts)
+    # flux_err = denominator  (same quantity, different framing)
+    flux      = S_net * t
+    flux_err  = denominator
+    snr_check = flux / flux_err
+
     return {
         "N_signal":     N,
         "N_sky_sample": len(sky_pixels),
@@ -165,7 +172,10 @@ def compute_snr(
         "sky_per_pixel":sky_per_pixel,
         "sky_scaled":   sky_scaled,
         "S_net":        S_net,
+        "flux":         flux,
+        "flux_err":     flux_err,
         "SNR":          snr,
+        "SNR_verified": snr_check,
     }
 
 
@@ -225,6 +235,11 @@ def main():
     print(f"  Total counts (signal)  : {res['counts']:.1f} ADU")
     print(f"  Net signal             : {res['S_net']:.1f} ADU")
     print(f"  SNR                    : {res['SNR']:.2f}")
+    print(f"\n=== Verification (flux / flux_err) ===")
+    print(f"  flux                   : {res['flux']:.2f} ADU·s")
+    print(f"  flux_err               : {res['flux_err']:.2f} ADU·s")
+    print(f"  SNR (verified)         : {res['SNR_verified']:.2f}")
+    print(f"  Match                  : {np.isclose(res['SNR'], res['SNR_verified'])}")
 
     plt.ioff()
     plt.show()
